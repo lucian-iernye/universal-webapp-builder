@@ -1,0 +1,65 @@
+version: '3.8'
+services:
+  library-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: library-app
+    restart: unless-stopped
+    working_dir: /var/www/
+    volumes:
+      - ./:/var/www
+    networks:
+      - library-net
+
+  library-nginx:
+    image: nginx:1.25-alpine
+    container_name: library-nginx
+    restart: unless-stopped
+    ports:
+      - "8000:80"
+    volumes:
+      - ./:/var/www
+      - ./docker/nginx:/etc/nginx/conf.d
+    networks:
+      - library-net
+
+  library-mysql-db:
+    image: mysql:8.0
+    container_name: library-mysql-db
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: library_db
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_PASSWORD: password
+      MYSQL_USER: library_user
+    volumes:
+      - dbdata:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    networks:
+      - library-net
+
+  library-mysql-test-db:
+    image: mysql:8.0
+    container_name: library-mysql-test-db
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: library_test_db
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_PASSWORD: password
+      MYSQL_USER: library_user
+    volumes:
+      - testdbdata:/var/lib/mysql
+    ports:
+      - "3307:3306"
+    networks:
+      - library-net
+
+networks:
+  library-net:
+    driver: bridge
+
+volumes:
+  dbdata:
+  testdbdata:
