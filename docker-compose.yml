@@ -1,65 +1,90 @@
-version: '3.8'
+x-args: &args
+  PROJECT_NAME: ${COMPOSE_PROJECT_NAME}
+
 services:
-  library-app:
+  app:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: library-app
+      dockerfile: docker/php/Dockerfile
+      args:
+        PHP_VERSION: ${PHP_VERSION:-8.2}
+        <<: *args
+    container_name: ${COMPOSE_PROJECT_NAME}
     restart: unless-stopped
-    working_dir: /var/www/
+    working_dir: /var/www
     volumes:
       - ./:/var/www
+    ports:
+      - 9000:9000
     networks:
-      - library-net
+      - app-net
 
-  library-nginx:
-    image: nginx:1.25-alpine
-    container_name: library-nginx
+  mysql:
+    image: mysql:8.0
+    container_name: ${COMPOSE_PROJECT_NAME}-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE}
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    ports:
+      - "${DB_PORT}:3306"
+    networks:
+      - app-net
+
+  mysql-test:
+    image: mysql:8.0
+    container_name: ${COMPOSE_PROJECT_NAME}-mysql-test
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_TEST_DATABASE}
+      MYSQL_USER: ${DB_TEST_USERNAME}
+      MYSQL_PASSWORD: ${DB_TEST_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${DB_TEST_ROOT_PASSWORD}
+    volumes:
+      - mysql-test-data:/var/lib/mysql
+    ports:
+      - "${DB_TEST_PORT}:3306"
+    networks:
+      - app-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: ${COMPOSE_PROJECT_NAME}-redis
     restart: unless-stopped
     ports:
-      - "8000:80"
+      - "${REDIS_PORT}:6379"
+    command: redis-server --save 20 1 --loglevel warning
+    volumes:
+      - redis-data:/data
+    networks:
+      - app-net
+
+  nginx:
+    image: nginx:latest
+    container_name: ${COMPOSE_PROJECT_NAME}-nginx
+    restart: unless-stopped
+    ports:
+      - "${NGINX_PORT}:80"
     volumes:
       - ./:/var/www
       - ./docker/nginx:/etc/nginx/conf.d
+    depends_on:
+      - app
     networks:
-      - library-net
-
-  library-mysql-db:
-    image: mysql:8.0
-    container_name: library-mysql-db
-    restart: unless-stopped
-    environment:
-      MYSQL_DATABASE: library_db
-      MYSQL_ROOT_PASSWORD: root_password
-      MYSQL_PASSWORD: password
-      MYSQL_USER: library_user
-    volumes:
-      - dbdata:/var/lib/mysql
-    ports:
-      - "3306:3306"
-    networks:
-      - library-net
-
-  library-mysql-test-db:
-    image: mysql:8.0
-    container_name: library-mysql-test-db
-    restart: unless-stopped
-    environment:
-      MYSQL_DATABASE: library_test_db
-      MYSQL_ROOT_PASSWORD: root_password
-      MYSQL_PASSWORD: password
-      MYSQL_USER: library_user
-    volumes:
-      - testdbdata:/var/lib/mysql
-    ports:
-      - "3307:3306"
-    networks:
-      - library-net
+      - app-net
 
 networks:
-  library-net:
+  app-net:
     driver: bridge
 
 volumes:
-  dbdata:
-  testdbdata:
+  mysql-data:
+    name: ${COMPOSE_PROJECT_NAME}-mysql-data
+  mysql-test-data:
+    name: ${COMPOSE_PROJECT_NAME}-mysql-test-data
+  redis-data:
+    name: ${COMPOSE_PROJECT_NAME}-redis-data
