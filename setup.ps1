@@ -29,6 +29,40 @@ do {
 
 $selectedVersion = $phpVersions[$selection - 1]
 
+# Get PHP port (9000-9100)
+do {
+    $phpPort = Read-Host "Enter PHP port (9000-9100)"
+    $phpPort = $phpPort -as [int]
+} while (-not $phpPort -or $phpPort -lt 9000 -or $phpPort -gt 9100)
+
+# Get MySQL port (3006-3100)
+do {
+    $mysqlPort = Read-Host "Enter MySQL primary database port (3006-3100)"
+    $mysqlPort = $mysqlPort -as [int]
+} while (-not $mysqlPort -or $mysqlPort -lt 3006 -or $mysqlPort -gt 3100)
+
+# Get MySQL Test port (3006-3100)
+do {
+    $mysqlTestPort = Read-Host "Enter MySQL test database port (3006-3100)"
+    $mysqlTestPort = $mysqlTestPort -as [int]
+    if ($mysqlTestPort -eq $mysqlPort) {
+        Write-Host "Test database port must be different from primary database port"
+        $mysqlTestPort = $null
+    }
+} while (-not $mysqlTestPort -or $mysqlTestPort -lt 3006 -or $mysqlTestPort -gt 3100 -or $mysqlTestPort -eq $mysqlPort)
+
+# Get Nginx port (8080-8100)
+do {
+    $nginxPort = Read-Host "Enter Nginx port (8080-8100)"
+    $nginxPort = $nginxPort -as [int]
+} while (-not $nginxPort -or $nginxPort -lt 8080 -or $nginxPort -gt 8100)
+
+# Get Redis port (6370-6400)
+do {
+    $redisPort = Read-Host "Enter Redis port (6370-6400)"
+    $redisPort = $redisPort -as [int]
+} while (-not $redisPort -or $redisPort -lt 6370 -or $redisPort -gt 6400)
+
 # Ensure directories exist
 New-Item -ItemType Directory -Force -Path "docker/php" | Out-Null
 New-Item -ItemType Directory -Force -Path "docker/nginx" | Out-Null
@@ -104,9 +138,9 @@ server {
     }
 
     # Add cache headers for static assets
-    location / {
-        try_files `$uri `$uri/ /index.php?`$query_string;
-        gzip_static on;
+    location ~* \.(css|js|jpg|jpeg|png|gif|ico|svg)$ {
+        expires 30d;
+        add_header Cache-Control "public, no-transform";
     }
 }
 "@
@@ -122,7 +156,7 @@ PHP_VERSION=$selectedVersion
 # Main Database
 DB_CONNECTION=mysql
 DB_HOST=mysql
-DB_PORT=3308
+DB_PORT=$mysqlPort
 DB_DATABASE=${projectName}_db
 DB_USERNAME=${projectName}_user
 DB_PASSWORD=secret
@@ -130,7 +164,7 @@ DB_ROOT_PASSWORD=secret
 
 # Test Database
 DB_TEST_HOST=mysql-test
-DB_TEST_PORT=3307
+DB_TEST_PORT=$mysqlTestPort
 DB_TEST_DATABASE=${projectName}_test_db
 DB_TEST_USERNAME=${projectName}_test_user
 DB_TEST_PASSWORD=secret
@@ -139,11 +173,11 @@ DB_TEST_ROOT_PASSWORD=secret
 # Redis
 REDIS_HOST=redis
 REDIS_PASSWORD=null
-REDIS_PORT=6379
+REDIS_PORT=$redisPort
 
 # Ports
-NGINX_PORT=8080
-PHP_PORT=9000
+NGINX_PORT=$nginxPort
+PHP_PORT=$phpPort
 "@
 
 $envContent | Out-File -FilePath ".env.setup" -Encoding UTF8 -Force
@@ -165,9 +199,82 @@ docker compose up -d --build
 
 Write-Host "`nDocker containers are starting up with PHP $selectedVersion"
 Write-Host "Project name: $projectName"
-Write-Host "`nNext steps:"
-Write-Host "1. Create a new Laravel project:"
-Write-Host "   docker compose exec app composer create-project laravel/laravel ."
-Write-Host "2. Update the Laravel .env file with values from .env.setup"
-Write-Host "3. Remove the temporary .env file"
-Write-Host "   Note: The .env.setup file contains your Docker configuration"
+
+# Function to check if container is ready
+function Check-Container {
+    $maxAttempts = 30
+    $attempt = 1
+    while ($attempt -le $maxAttempts) {
+        $containerStatus = docker compose ps --format json app | Select-String '"State":"running"'
+        if ($containerStatus) {
+            return $true
+        }
+        Write-Host "Attempt $attempt/$maxAttempts: Container not ready yet..."
+        Start-Sleep -Seconds 2
+        $attempt++
+    }
+    return $false
+}
+
+# Wait for containers to be healthy
+Write-Host "Waiting for containers to be ready..."
+
+# Select project type
+Write-Host "`nSelect project type:"
+Write-Host "1. Laravel"
+Write-Host "2. Nuxt"
+Write-Host "3. Vue"
+
+do {
+    $projectType = Read-Host "Select project type (1-3)"
+    $projectType = $projectType -as [int]
+} while (-not $projectType -or $projectType -lt 1 -or $projectType -gt 3)
+
+# Create the selected project type
+switch ($projectType) {
+    1 {
+        Write-Host "Creating new Laravel project..."
+        if (-not (Check-Container)) {
+            Write-Host "Error: Container app is not ready after waiting. Please check docker logs for issues."
+            exit 1
+        }
+        docker compose exec app bash -c "composer create-project laravel/laravel temp && mv temp/* . && mv temp/.* . 2>/dev/null || true && rm -rf temp"
+        
+        # Update Laravel .env with values from .env.setup
+        ((Get-Content -Path .env) -replace 'APP_NAME=.*', "APP_NAME=$projectName") | Set-Content -Path .env
+        ((Get-Content -Path .env) -replace 'APP_URL=.*', "APP_URL=http://localhost:$nginxPort") | Set-Content -Path .env
+        ((Get-Content -Path .env) -replace 'DB_HOST=.*', 'DB_HOST=mysql') | Set-Content -Path .env
+        ((Get-Content -Path .env) -replace 'DB_PORT=.*', 'DB_PORT=3306') | Set-Content -Path .env
+        ((Get-Content -Path .env) -replace 'DB_DATABASE=.*', "DB_DATABASE=${projectName}_db") | Set-Content -Path .env
+        ((Get-Content -Path .env) -replace 'DB_USERNAME=.*', "DB_USERNAME=${projectName}_user") | Set-Content -Path .env
+        ((Get-Content -Path .env) -replace 'DB_PASSWORD=.*', 'DB_PASSWORD=secret') | Set-Content -Path .env
+        ((Get-Content -Path .env) -replace 'REDIS_HOST=.*', 'REDIS_HOST=redis') | Set-Content -Path .env
+        ((Get-Content -Path .env) -replace 'REDIS_PASSWORD=.*', 'REDIS_PASSWORD=null') | Set-Content -Path .env
+        ((Get-Content -Path .env) -replace 'REDIS_PORT=.*', "REDIS_PORT=$redisPort") | Set-Content -Path .env
+
+        Write-Host "`nLaravel project created successfully!"
+        Write-Host "Environment configured with:"
+        Write-Host "- App URL: http://localhost:$nginxPort"
+        Write-Host "- Database: ${projectName}_db"
+        Write-Host "- DB User: ${projectName}_user"
+        Write-Host "- Redis Port: $redisPort"
+    }
+    2 {
+        Write-Host "Creating new Nuxt project..."
+        docker compose exec app bash -c "npm create nuxt@latest . << EOF`n`n`n`n`n`nEOF"
+        Write-Host "`nNuxt project created successfully!"
+        Write-Host "Next steps:"
+        Write-Host "1. Install dependencies: docker compose exec app npm install"
+        Write-Host "2. Start development server: docker compose exec app npm run dev"
+    }
+    3 {
+        Write-Host "Creating new Vue project..."
+        docker compose exec app bash -c "npm create vue@latest . << EOF`n`n`n`n`n`n`nEOF"
+        Write-Host "`nVue project created successfully!"
+        Write-Host "Next steps:"
+        Write-Host "1. Install dependencies: docker compose exec app npm install"
+        Write-Host "2. Start development server: docker compose exec app npm run dev"
+    }
+}
+
+Write-Host "`nNote: The .env.setup file contains your Docker configuration"

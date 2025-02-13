@@ -34,6 +34,58 @@ case $selection in
     5) version="8.3" ;;
 esac
 
+# Get PHP port (9000-9100)
+while true; do
+    read -p "Enter PHP port (9000-9100): " php_port
+    if [[ $php_port =~ ^[0-9]+$ ]] && [ $php_port -ge 9000 ] && [ $php_port -le 9100 ]; then
+        break
+    fi
+    echo "Please enter a valid port number between 9000 and 9100"
+done
+
+# Get MySQL port (3006-3100)
+while true; do
+    read -p "Enter MySQL primary database port (3006-3100): " mysql_port
+    if [[ $mysql_port =~ ^[0-9]+$ ]] && [ $mysql_port -ge 3006 ] && [ $mysql_port -le 3100 ]; then
+        break
+    fi
+    echo "Please enter a valid port number between 3006 and 3100"
+done
+
+# Get MySQL Test port (3006-3100)
+while true; do
+    read -p "Enter MySQL test database port (3006-3100): " mysql_test_port
+    if [[ $mysql_test_port =~ ^[0-9]+$ ]] && 
+       [ $mysql_test_port -ge 3006 ] && 
+       [ $mysql_test_port -le 3100 ] && 
+       [ $mysql_test_port -ne $mysql_port ]; then
+        break
+    fi
+    if [ $mysql_test_port -eq $mysql_port ]; then
+        echo "Test database port must be different from primary database port"
+    else
+        echo "Please enter a valid port number between 3006 and 3100"
+    fi
+done
+
+# Get Nginx port (8080-8100)
+while true; do
+    read -p "Enter Nginx port (8080-8100): " nginx_port
+    if [[ $nginx_port =~ ^[0-9]+$ ]] && [ $nginx_port -ge 8080 ] && [ $nginx_port -le 8100 ]; then
+        break
+    fi
+    echo "Please enter a valid port number between 8080 and 8100"
+done
+
+# Get Redis port (6370-6400)
+while true; do
+    read -p "Enter Redis port (6370-6400): " redis_port
+    if [[ $redis_port =~ ^[0-9]+$ ]] && [ $redis_port -ge 6370 ] && [ $redis_port -le 6400 ]; then
+        break
+    fi
+    echo "Please enter a valid port number between 6370 and 6400"
+done
+
 # Create docker/php directory if it doesn't exist
 mkdir -p docker/php docker/nginx
 
@@ -62,6 +114,11 @@ RUN docker-php-ext-install pdo_mysql mbstring exif pcntl bcmath gd
 
 # Get latest Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
+RUN composer global require laravel/installer
+
+# Install Node.js LTS
+RUN curl -sL https://deb.nodesource.com/setup_lts.x | bash -
+RUN apt-get install -y nodejs
 
 # Create system user to run Composer and Artisan Commands
 RUN useradd -G www-data,root -u 1000 -d /home/dev dev
@@ -88,7 +145,7 @@ server {
     location ~ \.php$ {
         try_files \$uri =404;
         fastcgi_split_path_info ^(.+\.php)(/.+)$;
-        fastcgi_pass \${COMPOSE_PROJECT_NAME}:9000;
+        fastcgi_pass app:9000;
         fastcgi_index index.php;
         include fastcgi_params;
         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
@@ -117,7 +174,7 @@ PHP_VERSION=$version
 # Main Database
 DB_CONNECTION=mysql
 DB_HOST=mysql
-DB_PORT=3308
+DB_PORT=$mysql_port
 DB_DATABASE=${project_name}_db
 DB_USERNAME=${project_name}_user
 DB_PASSWORD=secret
@@ -125,7 +182,7 @@ DB_ROOT_PASSWORD=secret
 
 # Test Database
 DB_TEST_HOST=mysql-test
-DB_TEST_PORT=3307
+DB_TEST_PORT=$mysql_test_port
 DB_TEST_DATABASE=${project_name}_test_db
 DB_TEST_USERNAME=${project_name}_test_user
 DB_TEST_PASSWORD=secret
@@ -134,11 +191,11 @@ DB_TEST_ROOT_PASSWORD=secret
 # Redis
 REDIS_HOST=redis
 REDIS_PASSWORD=null
-REDIS_PORT=6379
+REDIS_PORT=$redis_port
 
 # Ports
-NGINX_PORT=8080
-PHP_PORT=9000
+NGINX_PORT=$nginx_port
+PHP_PORT=$php_port
 EOF
 
 echo ".env.setup file has been created with project name $project_name and PHP version $version"
@@ -157,9 +214,106 @@ docker compose up -d --build
 
 echo -e "\nDocker containers are starting up with PHP $version"
 echo "Project name: $project_name"
-echo -e "\nNext steps:"
-echo "1. Create a new Laravel project:"
-echo "   docker compose exec app composer create-project laravel/laravel ."
-echo "2. Update the Laravel .env file with values from .env.setup"
-echo "3. Remove the temporary .env file"
-echo "   Note: The .env.setup file contains your Docker configuration"
+
+# Wait for containers to be healthy
+echo "Waiting for containers to be ready..."
+
+# Function to check if container is ready
+check_container() {
+    local max_attempts=30
+    local attempt=1
+    while [ $attempt -le $max_attempts ]; do
+        container_status=$(docker compose ps --format json app | grep '"State":"running"' || true)
+        if [ ! -z "$container_status" ]; then
+            return 0
+        fi
+        echo "Attempt $attempt/$max_attempts: Container not ready yet..."
+        sleep 2
+        attempt=$((attempt + 1))
+    done
+    return 1
+}
+
+Select project type
+echo -e "\nSelect project type:"
+echo "1. Laravel"
+echo "2. Nuxt"
+echo "3. Vue"
+
+while true; do
+    read -p "Select project type (1-3): " project_type
+    if [[ $project_type =~ ^[1-3]$ ]]; then
+        break
+    fi
+    echo "Please enter a number between 1 and 3"
+done
+
+Create the selected project type
+case $project_type in
+    1)
+        echo "Creating new Laravel project..."
+        if ! check_container; then
+            echo "Error: Container ${project_name}-app is not ready after waiting. Please check docker logs for issues."
+            exit 1
+        fi
+
+        # Try to create Laravel project in a temp directory and move it up
+        if docker compose exec app bash -c "composer create-project laravel/laravel temp && mv temp/* . && mv temp/.* . 2>/dev/null || true && rm -rf temp"; then
+            # Update Laravel .env with values from .env.setup
+            sed -i '' "s#APP_NAME=.*#APP_NAME=${project_name}#" .env
+            sed -i '' "s#APP_URL=.*#APP_URL=http://localhost:${nginx_port}#" .env
+            sed -i '' "s#DB_HOST=.*#DB_HOST=mysql#" .env
+            sed -i '' "s#DB_PORT=.*#DB_PORT=3306#" .env
+            sed -i '' "s#DB_DATABASE=.*#DB_DATABASE=${project_name}_db#" .env
+            sed -i '' "s#DB_USERNAME=.*#DB_USERNAME=${project_name}_user#" .env
+            sed -i '' "s#DB_PASSWORD=.*#DB_PASSWORD=secret#" .env
+            sed -i '' "s#REDIS_HOST=.*#REDIS_HOST=redis#" .env
+            sed -i '' "s#REDIS_PASSWORD=.*#REDIS_PASSWORD=null#" .env
+            sed -i '' "s#REDIS_PORT=.*#REDIS_PORT=${redis_port}#" .env
+
+            echo "\nLaravel project created successfully!"
+            echo "Environment configured with:"
+            echo "- App URL: http://localhost:${nginx_port}"
+            echo "- Database: ${project_name}_db"
+            echo "- DB User: ${project_name}_user"
+            echo "- Redis Port: ${redis_port}"
+        else
+            echo "\nError: Failed to create Laravel project. Please check the following:"
+            echo "1. Container logs: docker compose logs app"
+            echo "2. Container status: docker compose ps"
+            echo "3. Try running the command manually: docker compose exec app bash -c 'composer create-project laravel/laravel temp && mv temp/* . && mv temp/.* . && rm -rf temp'"
+            exit 1
+        fi
+        ;;
+    2)
+        echo "Creating new Nuxt project..."
+        docker compose exec app bash -c "npm create nuxt@latest . << EOF
+\n
+\n
+\n
+\n
+\n
+EOF"
+        echo "\nNuxt project created successfully!"
+        echo "Next steps:"
+        echo "1. Install dependencies: docker compose exec app npm install"
+        echo "2. Start development server: docker compose exec app npm run dev"
+        ;;
+    3)
+        echo "Creating new Vue project..."
+        docker compose exec app bash -c "npm create vue@latest . << EOF
+\n
+\n
+\n
+\n
+\n
+\n
+EOF"
+        echo "\nVue project created successfully!"
+        echo "Next steps:"
+        echo "1. Install dependencies: docker compose exec app npm install"
+        echo "2. Start development server: docker compose exec app npm run dev"
+        ;;
+esac
+
+echo "\nNote: The .env.setup file contains your Docker configuration"
