@@ -34,57 +34,142 @@ case $selection in
     5) version="8.3" ;;
 esac
 
-# Get PHP port (9000-9100)
-while true; do
-    read -p "Enter PHP port (9000-9100): " php_port
-    if [[ $php_port =~ ^[0-9]+$ ]] && [ $php_port -ge 9000 ] && [ $php_port -le 9100 ]; then
-        break
-    fi
-    echo "Please enter a valid port number between 9000 and 9100"
-done
+# Check PHP version compatibility
+echo -e "\nChecking PHP version compatibility..."
+case $version in
+    "8.2"|"8.3")
+        echo "PHP $version: Compatible with all Laravel versions"
+        ;;
+    "8.1")
+        echo "⚠️  Warning: PHP 8.1"
+        echo "   - Laravel 11+ requires PHP 8.2 or higher"
+        echo "   - Laravel Breeze 2+ requires PHP 8.2 or higher"
+        echo "   - Some packages may require PHP 8.2"
+        ;;
+    "7.4")
+        echo "⚠️  Warning: PHP 7.4"
+        echo "   - Laravel 9+ requires PHP 8.0 or higher"
+        echo "   - Laravel 8.x will be used"
+        echo "   - Many packages may have compatibility issues"
+        ;;
+    "7.3")
+        echo "⚠️  Warning: PHP 7.3"
+        echo "   - Laravel 8+ requires PHP 7.4 or higher"
+        echo "   - Laravel 7.x will be used"
+        echo "   - Many packages may have compatibility issues"
+        ;;
+    *)
+        echo "⚠️  Warning: PHP version $version might have compatibility issues with Laravel"
+        ;;
+esac
 
-# Get MySQL port (3006-3100)
-while true; do
-    read -p "Enter MySQL primary database port (3006-3100): " mysql_port
-    if [[ $mysql_port =~ ^[0-9]+$ ]] && [ $mysql_port -ge 3006 ] && [ $mysql_port -le 3100 ]; then
-        break
-    fi
-    echo "Please enter a valid port number between 3006 and 3100"
-done
+echo -e "\nPress Enter to continue or Ctrl+C to abort"
+read
 
-# Get MySQL Test port (3006-3100)
-while true; do
-    read -p "Enter MySQL test database port (3006-3100): " mysql_test_port
-    if [[ $mysql_test_port =~ ^[0-9]+$ ]] && 
-       [ $mysql_test_port -ge 3006 ] && 
-       [ $mysql_test_port -le 3100 ] && 
-       [ $mysql_test_port -ne $mysql_port ]; then
-        break
-    fi
-    if [ $mysql_test_port -eq $mysql_port ]; then
-        echo "Test database port must be different from primary database port"
+# Function to check if a port is available
+check_port() {
+    local port=$1
+    if command -v nc >/dev/null 2>&1; then
+        nc -z localhost $port >/dev/null 2>&1
+        if [ $? -eq 0 ]; then
+            return 1  # Port is in use
+        fi
     else
-        echo "Please enter a valid port number between 3006 and 3100"
+        # Fallback to using lsof if nc is not available
+        if command -v lsof >/dev/null 2>&1; then
+            lsof -i :$port >/dev/null 2>&1
+            if [ $? -eq 0 ]; then
+                return 1  # Port is in use
+            fi
+        fi
     fi
-done
+    return 0  # Port is available
+}
 
-# Get Nginx port (8080-8100)
-while true; do
-    read -p "Enter Nginx port (8080-8100): " nginx_port
-    if [[ $nginx_port =~ ^[0-9]+$ ]] && [ $nginx_port -ge 8080 ] && [ $nginx_port -le 8100 ]; then
-        break
-    fi
-    echo "Please enter a valid port number between 8080 and 8100"
-done
+# Function to suggest next available port
+find_next_port() {
+    local start_port=$1
+    local max_port=$2
+    local current_port=$start_port
 
-# Get Redis port (6370-6400)
-while true; do
-    read -p "Enter Redis port (6370-6400): " redis_port
-    if [[ $redis_port =~ ^[0-9]+$ ]] && [ $redis_port -ge 6370 ] && [ $redis_port -le 6400 ]; then
-        break
+    while [ $current_port -le $max_port ]; do
+        if check_port $current_port; then
+            echo $current_port
+            return 0
+        fi
+        current_port=$((current_port + 1))
+    done
+    echo 0  # No available ports found
+    return 1
+}
+
+# Function to get port with default option
+get_port() {
+    local port_name=$1
+    local default_port=$2
+    local min_port=$3
+    local max_port=$4
+    local current_port=""
+
+    # Check if default port is available
+    if ! check_port $default_port; then
+        local next_port=$(find_next_port $min_port $max_port)
+        if [ $next_port -eq 0 ]; then
+            echo "Error: No available ports found in range $min_port-$max_port for $port_name" >&2
+            exit 1
+        fi
+        echo "Warning: Default port $default_port for $port_name is in use." >&2
+        echo "Next available port is: $next_port" >&2
+        default_port=$next_port
     fi
-    echo "Please enter a valid port number between 6370 and 6400"
-done
+
+    while true; do
+        read -p "Use default ${port_name} port (${default_port})? [Y/n]: " use_default
+        use_default=${use_default:-Y}  # Default to Y if user just hits enter
+        use_default=$(echo $use_default | tr '[:lower:]' '[:upper:]')
+        
+        if [[ $use_default == "Y" ]]; then
+            current_port=$default_port
+            break
+        elif [[ $use_default == "N" ]]; then
+            while true; do
+                read -p "Enter ${port_name} port (${min_port}-${max_port}): " current_port
+                if [[ $current_port =~ ^[0-9]+$ ]] && 
+                   [ $current_port -ge $min_port ] && 
+                   [ $current_port -le $max_port ]; then
+                    break
+                fi
+                echo "Please enter a valid port number between ${min_port} and ${max_port}"
+            done
+            break
+        fi
+        echo "Please enter Y or n"
+    done
+    echo $current_port
+}
+
+# Get ports with defaults
+php_port=$(get_port "PHP" 9000 9000 9100)
+echo "Selected PHP port: ${php_port}"
+
+mysql_port=$(get_port "MySQL" 3306 3306 3399)
+echo "Selected MySQL port: ${mysql_port}"
+
+# Get MySQL Test port with dynamic default and range
+test_default=$((mysql_port + 1))
+mysql_test_port=$(get_port "MySQL Test" $test_default $((mysql_port + 1)) 3399)
+# Verify the ports are different
+if [ "$mysql_test_port" -eq "$mysql_port" ]; then
+    echo "Error: Test database port must be different from primary database port"
+    exit 1
+fi
+echo "Selected MySQL Test port: ${mysql_test_port}"
+
+redis_port=$(get_port "Redis" 6379 6379 6400)
+echo "Selected Redis port: ${redis_port}"
+
+nginx_port=$(get_port "Nginx" 8080 8080 8100)
+echo "Selected Nginx port: ${nginx_port}"
 
 # Create docker/php directory if it doesn't exist
 mkdir -p docker/php docker/nginx
@@ -234,7 +319,6 @@ check_container() {
     return 1
 }
 
-Select project type
 echo -e "\nSelect project type:"
 echo "1. Laravel"
 echo "2. Nuxt"
@@ -248,7 +332,7 @@ while true; do
     echo "Please enter a number between 1 and 3"
 done
 
-Create the selected project type
+echo "Creating the selected project type"
 case $project_type in
     1)
         echo "Creating new Laravel project..."
@@ -257,8 +341,140 @@ case $project_type in
             exit 1
         fi
 
-        # Try to create Laravel project in a temp directory and move it up
-        if docker compose exec app bash -c "composer create-project laravel/laravel temp && mv temp/* . && mv temp/.* . 2>/dev/null || true && rm -rf temp"; then
+        # Get Laravel setup preferences
+        echo -e "\nLaravel Project Setup Options:\n"
+
+        # Authentication
+        echo "Select authentication setup:"
+        echo "1. No authentication (skip)"
+        echo "2. Laravel Breeze (minimal)"
+        echo "3. Laravel Jetstream"
+        while true; do
+            read -p "Choose authentication (1-3): " auth_choice
+            if [[ $auth_choice =~ ^[1-3]$ ]]; then
+                break
+            fi
+            echo "Please enter a number between 1 and 3"
+        done
+
+        # If Breeze selected, get stack preference
+        if [ "$auth_choice" = "2" ]; then
+            echo -e "\nSelect Breeze stack:"
+            echo "1. Blade with Alpine.js"
+            echo "2. Livewire (Blade + Alpine.js + Livewire)"
+            echo "3. React with Inertia"
+            echo "4. Vue with Inertia"
+            echo "5. API only"
+            while true; do
+                read -p "Choose stack (1-5): " breeze_stack_choice
+                if [[ $breeze_stack_choice =~ ^[1-5]$ ]]; then
+                    break
+                fi
+                echo "Please enter a number between 1 and 5"
+            done
+
+            # Dark mode option for Breeze
+            read -p "Would you like to include dark mode support? [y/N]: " dark_mode_choice
+            dark_mode_choice=${dark_mode_choice:-N}
+        fi
+
+        # If Jetstream selected, get stack preference
+        if [ "$auth_choice" = "3" ]; then
+            echo -e "\nSelect Jetstream stack:"
+            echo "1. Livewire + Blade"
+            echo "2. Inertia + Vue.js"
+            while true; do
+                read -p "Choose stack (1-2): " jetstream_stack_choice
+                if [[ $jetstream_stack_choice =~ ^[1-2]$ ]]; then
+                    break
+                fi
+                echo "Please enter 1 or 2"
+            done
+
+            # Teams feature
+            read -p "Would you like to include team support? [y/N]: " teams_choice
+            teams_choice=${teams_choice:-N}
+        fi
+
+        # Testing preference
+        echo -e "\nSelect testing framework:"
+        echo "1. PHPUnit (default)"
+        echo "2. Pest (recommended)"
+        while true; do
+            read -p "Choose testing framework (1-2): " test_choice
+            if [[ $test_choice =~ ^[1-2]$ ]]; then
+                break
+            fi
+            echo "Please enter 1 or 2"
+        done
+
+        # Build Laravel installation command based on choices
+        laravel_cmd="composer create-project laravel/laravel temp"
+
+        # Add authentication options
+        case $auth_choice in
+            2)  # Breeze
+                laravel_cmd="$laravel_cmd && cd temp && composer require laravel/breeze --dev"
+                
+                # Determine Breeze stack argument
+                case $breeze_stack_choice in
+                    1) stack="blade" ;;
+                    2) stack="livewire" ;;
+                    3) stack="react" ;;
+                    4) stack="vue" ;;
+                    5) stack="api" ;;
+                esac
+
+                # Add Breeze installation command
+                if [ "$(echo "$dark_mode_choice" | tr '[:lower:]' '[:upper:]')" = "Y" ]; then
+                    laravel_cmd="$laravel_cmd && php artisan breeze:install $stack --dark"
+                else
+                    laravel_cmd="$laravel_cmd && php artisan breeze:install $stack"
+                fi
+
+                # Add npm commands if not API stack
+                if [ "$breeze_stack_choice" != "5" ]; then
+                    laravel_cmd="$laravel_cmd && npm install && npm run build"
+                fi
+                ;;
+
+            3)  # Jetstream
+                laravel_cmd="$laravel_cmd && cd temp && composer require laravel/jetstream"
+                
+                # Add Jetstream installation command
+                if [ "$jetstream_stack_choice" = "1" ]; then
+                    if [ "$(echo "$teams_choice" | tr '[:lower:]' '[:upper:]')" = "Y" ]; then
+                        laravel_cmd="$laravel_cmd && php artisan jetstream:install livewire --teams"
+                    else
+                        laravel_cmd="$laravel_cmd && php artisan jetstream:install livewire"
+                    fi
+                else
+                    if [ "$(echo "$teams_choice" | tr '[:lower:]' '[:upper:]')" = "Y" ]; then
+                        laravel_cmd="$laravel_cmd && php artisan jetstream:install inertia --teams"
+                    else
+                        laravel_cmd="$laravel_cmd && php artisan jetstream:install inertia"
+                    fi
+                fi
+
+                laravel_cmd="$laravel_cmd && npm install && npm run build"
+                ;;
+        esac
+
+        # Add Pest if selected
+        if [ "$test_choice" = "2" ]; then
+            laravel_cmd="$laravel_cmd && composer require pestphp/pest --dev --with-all-dependencies && php artisan pest:install"
+        fi
+
+        # Add final move commands
+        laravel_cmd="$laravel_cmd && mv * .. && mv .* .. 2>/dev/null || true && cd .. && rm -rf temp"
+
+        # Create Laravel project with all selected options
+        echo "Creating new Laravel project..."
+        if docker compose exec app bash -c "$laravel_cmd"; then
+            # Add custom entries to .gitignore
+            echo -e "\n# Custom entries\ndocker/\n.env.setup" >> .gitignore
+            echo "Added custom entries to .gitignore"
+
             # Update Laravel .env with values from .env.setup
             sed -i '' "s#APP_NAME=.*#APP_NAME=${project_name}#" .env
             sed -i '' "s#APP_URL=.*#APP_URL=http://localhost:${nginx_port}#" .env
