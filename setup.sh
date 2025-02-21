@@ -213,6 +213,11 @@ RUN mkdir -p /home/dev/.composer && \
 # Set working directory
 WORKDIR /var/www
 
+# Fix permissions
+RUN chown -R dev:dev /var/www && \
+    chmod -R 755 /var/www && \
+    git config --system --add safe.directory /var/www
+
 USER dev
 EOF
 
@@ -432,10 +437,7 @@ case $project_type in
                     laravel_cmd="$laravel_cmd && php artisan breeze:install $stack"
                 fi
 
-                # Add npm commands if not API stack
-                if [ "$breeze_stack_choice" != "5" ]; then
-                    laravel_cmd="$laravel_cmd && npm install && npm run build"
-                fi
+                # npm install will be run at the end of the script
                 ;;
 
             3)  # Jetstream
@@ -456,7 +458,7 @@ case $project_type in
                     fi
                 fi
 
-                laravel_cmd="$laravel_cmd && npm install && npm run build"
+                # npm install will be run at the end
                 ;;
         esac
 
@@ -466,8 +468,8 @@ case $project_type in
         fi
 
         # Add final move commands
-        laravel_cmd="$laravel_cmd && mv * .. && mv .* .. 2>/dev/null || true && cd .. && rm -rf temp"
-
+        laravel_cmd="$laravel_cmd && shopt -s dotglob && find . -maxdepth 1 ! -name . ! -name .. -exec mv {} .. \; && cd .. && rm -rf temp"
+        
         # Create Laravel project with all selected options
         echo "Creating new Laravel project..."
         if docker compose exec app bash -c "$laravel_cmd"; then
@@ -512,7 +514,8 @@ case $project_type in
 EOF"
         echo "\nNuxt project created successfully!"
         echo "Next steps:"
-        echo "1. Install dependencies: docker compose exec app npm install"
+        npm install
+        echo "✅ Dependencies installed successfully"
         echo "2. Start development server: docker compose exec app npm run dev"
         ;;
     3)
@@ -527,7 +530,8 @@ EOF"
 EOF"
         echo "\nVue project created successfully!"
         echo "Next steps:"
-        echo "1. Install dependencies: docker compose exec app npm install"
+        npm install
+        echo "✅ Dependencies installed successfully"
         echo "2. Start development server: docker compose exec app npm run dev"
         ;;
 esac

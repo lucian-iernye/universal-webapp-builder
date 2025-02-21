@@ -33,28 +33,28 @@ $selectedVersion = $phpVersions[$selection - 1]
 Write-Host "`nChecking PHP version compatibility..." -ForegroundColor Cyan
 switch ($selectedVersion) {
     { $_ -in @("8.2", "8.3") } {
-        Write-Host "PHP $selectedVersion: Compatible with all Laravel versions" -ForegroundColor Green
+        Write-Host ("PHP {0}: Compatible with all Laravel versions" -f $selectedVersion) -ForegroundColor Green
     }
     "8.1" {
-        Write-Host "⚠️  Warning: PHP 8.1" -ForegroundColor Yellow
+        Write-Host "Warning: PHP 8.1" -ForegroundColor Yellow
         Write-Host "   - Laravel 11+ requires PHP 8.2 or higher"
         Write-Host "   - Laravel Breeze 2+ requires PHP 8.2 or higher"
         Write-Host "   - Some packages may require PHP 8.2"
     }
     "7.4" {
-        Write-Host "⚠️  Warning: PHP 7.4" -ForegroundColor Yellow
+        Write-Host "Warning: PHP 7.4" -ForegroundColor Yellow
         Write-Host "   - Laravel 9+ requires PHP 8.0 or higher"
         Write-Host "   - Laravel 8.x will be used"
         Write-Host "   - Many packages may have compatibility issues"
     }
     "7.3" {
-        Write-Host "⚠️  Warning: PHP 7.3" -ForegroundColor Yellow
+        Write-Host "Warning: PHP 7.3" -ForegroundColor Yellow
         Write-Host "   - Laravel 8+ requires PHP 7.4 or higher"
         Write-Host "   - Laravel 7.x will be used"
         Write-Host "   - Many packages may have compatibility issues"
     }
     default {
-        Write-Host "⚠️  Warning: PHP version $selectedVersion might have compatibility issues with Laravel" -ForegroundColor Yellow
+        Write-Host ("Warning: PHP version {0} might have compatibility issues with Laravel" -f $selectedVersion) -ForegroundColor Yellow
     }
 }
 
@@ -106,16 +106,16 @@ function Get-Port {
     if (-not (Test-PortAvailable -port $defaultPort)) {
         $nextPort = Find-NextPort -startPort $minPort -maxPort $maxPort
         if ($nextPort -eq 0) {
-            Write-Host "Error: No available ports found in range $minPort-$maxPort for $portName" -ForegroundColor Red
+            Write-Host ("Error: No available ports found in range {0}-{1} for {2}" -f $minPort,$maxPort,$portName) -ForegroundColor Red
             exit 1
         }
-        Write-Host "Warning: Default port $defaultPort for $portName is in use." -ForegroundColor Yellow
-        Write-Host "Next available port is: $nextPort" -ForegroundColor Yellow
+        Write-Host ("Warning: Default port {0} for {1} is in use." -f $defaultPort,$portName) -ForegroundColor Yellow
+        Write-Host ("Next available port is: {0}" -f $nextPort) -ForegroundColor Yellow
         $defaultPort = $nextPort
     }
 
     do {
-        $useDefault = Read-Host "Use default $portName port ($defaultPort)? [Y/n]"
+        $useDefault = Read-Host ("Use default {0} port ({1})? [Y/n]" -f $portName,$defaultPort)
         if ([string]::IsNullOrWhiteSpace($useDefault)) { $useDefault = 'Y' }
 
         if ($useDefault.ToUpper() -eq 'Y') {
@@ -123,12 +123,12 @@ function Get-Port {
         }
         elseif ($useDefault.ToUpper() -eq 'N') {
             do {
-                $port = Read-Host "Enter $portName port ($minPort-$maxPort)"
+                $port = Read-Host ("Enter {0} port ({1}-{2})" -f $portName,$minPort,$maxPort)
                 $port = $port -as [int]
                 if ($port -and $port -ge $minPort -and $port -le $maxPort) {
                     return $port
                 }
-                Write-Host "Please enter a valid port number between $minPort and $maxPort"
+                Write-Host ("Please enter a valid port number between {0} and {1}" -f $minPort,$maxPort)
             } while ($true)
         }
         Write-Host "Please enter Y or n"
@@ -137,10 +137,10 @@ function Get-Port {
 
 # Get ports with defaults
 $phpPort = Get-Port -portName "PHP" -defaultPort 9000 -minPort 9000 -maxPort 9100
-Write-Host "Selected PHP port: $phpPort"
+Write-Host ("Selected PHP port: {0}" -f $phpPort)
 
 $mysqlPort = Get-Port -portName "MySQL" -defaultPort 3306 -minPort 3306 -maxPort 3399
-Write-Host "Selected MySQL port: $mysqlPort"
+Write-Host ("Selected MySQL port: {0}" -f $mysqlPort)
 
 # Get MySQL Test port with dynamic default and range
 $testDefault = $mysqlPort + 1
@@ -151,13 +151,13 @@ do {
     }
     Write-Host "Test database port must be different from primary database port"
 } while ($true)
-Write-Host "Selected MySQL Test port: $mysqlTestPort"
+Write-Host ("Selected MySQL Test port: {0}" -f $mysqlTestPort)
 
 $redisPort = Get-Port -portName "Redis" -defaultPort 6379 -minPort 6379 -maxPort 6400
-Write-Host "Selected Redis port: $redisPort"
+Write-Host ("Selected Redis port: {0}" -f $redisPort)
 
 $nginxPort = Get-Port -portName "Nginx" -defaultPort 8080 -minPort 8080 -maxPort 8100
-Write-Host "Selected Nginx port: $nginxPort"
+Write-Host ("Selected Nginx port: {0}" -f $nginxPort)
 
 # Ensure directories exist
 New-Item -ItemType Directory -Force -Path "docker/php" | Out-Null
@@ -199,15 +199,18 @@ RUN useradd -G www-data,root -u 1000 -d /home/dev dev
 RUN mkdir -p /home/dev/.composer && \
     chown -R dev:dev /home/dev
 
-# Set working directory
+# Set working directory and fix permissions
 WORKDIR /var/www
+RUN chown -R dev:dev /var/www && \
+    chmod -R 755 /var/www && \
+    git config --system --add safe.directory /var/www
 
 USER dev
 "@
 
 $dockerfileContent | Out-File -FilePath "docker/php/Dockerfile" -Encoding UTF8 -Force
 
-Write-Host "`nDockerfile has been created with PHP $selectedVersion"
+Write-Host ("`nDockerfile has been created with PHP {0}" -f $selectedVersion)
 
 # Create nginx configuration
 $defaultConfig = @"
@@ -241,7 +244,18 @@ server {
 }
 "@
 
-$defaultConfig | Out-File -FilePath "docker/nginx/default.conf" -Encoding UTF8 -Force
+# Ensure directory exists
+New-Item -ItemType Directory -Force -Path "docker/nginx" | Out-Null
+
+# Convert to Unix line endings and UTF-8 without BOM
+$defaultConfig = $defaultConfig -replace "`r`n", "`n"
+[System.IO.File]::WriteAllText(
+    (Join-Path (Get-Location) "docker/nginx/default.conf"),
+    $defaultConfig,
+    [System.Text.UTF8Encoding]::new($false)
+)
+
+Write-Host "Created Nginx configuration with Unix line endings"
 
 # Create .env.setup file
 $envContent = @"
@@ -278,7 +292,7 @@ PHP_PORT=$phpPort
 
 $envContent | Out-File -FilePath ".env.setup" -Encoding UTF8 -Force
 
-Write-Host ".env.setup file has been created with project name $projectName and PHP version $selectedVersion"
+Write-Host (".env.setup file has been created with project name {0} and PHP version {1}" -f $projectName,$selectedVersion)
 
 # Create temporary .env for Docker Compose
 Copy-Item .env.setup .env
@@ -293,8 +307,8 @@ if ($projectContainers) {
 
 docker compose up -d --build
 
-Write-Host "`nDocker containers are starting up with PHP $selectedVersion"
-Write-Host "Project name: $projectName"
+Write-Host ("`nDocker containers are starting up with PHP {0}" -f $selectedVersion)
+Write-Host ("Project name: {0}" -f $projectName)
 
 # Function to check if container is ready
 function Check-Container {
@@ -305,7 +319,7 @@ function Check-Container {
         if ($containerStatus) {
             return $true
         }
-        Write-Host "Attempt $attempt/$maxAttempts: Container not ready yet..."
+        Write-Host ("Attempt {0}/{1}: Container not ready yet..." -f $attempt,$maxAttempts)
         Start-Sleep -Seconds 2
         $attempt++
     }
@@ -416,28 +430,19 @@ switch ($projectType) {
 
                 # Add npm commands if not API stack
                 if ($breezeStackChoice -ne 5) {
-                    $laravelCmd += " && npm install && npm run build"
+                    $laravelCmd += " && npm install"
                 }
             }
             3 {  # Jetstream
-                $laravelCmd += " && cd temp && composer require laravel/jetstream"
+                $laravelCmd += " && composer require laravel/jetstream"
                 
-                # Install Jetstream with selected stack
                 if ($jetstreamStackChoice -eq 1) {
-                    if ($teamsChoice.ToUpper() -eq 'Y') {
-                        $laravelCmd += " && php artisan jetstream:install livewire --teams"
-                    } else {
-                        $laravelCmd += " && php artisan jetstream:install livewire"
-                    }
+                    $laravelCmd += " && php artisan jetstream:install livewire --teams"
                 } else {
-                    if ($teamsChoice.ToUpper() -eq 'Y') {
-                        $laravelCmd += " && php artisan jetstream:install inertia --teams"
-                    } else {
-                        $laravelCmd += " && php artisan jetstream:install inertia"
-                    }
+                    $laravelCmd += " && php artisan jetstream:install inertia --teams"
                 }
 
-                $laravelCmd += " && npm install && npm run build"
+                $laravelCmd += " && npm install"
             }
         }
 
@@ -446,8 +451,18 @@ switch ($projectType) {
             $laravelCmd += " && composer require pestphp/pest --dev --with-all-dependencies && php artisan pest:install"
         }
 
-        # Add final move commands
-        $laravelCmd += " && mv * .. && mv .* .. 2>/dev/null || true && cd .. && rm -rf temp"
+        # Add final move commands with error checking
+        $laravelCmd += @'
+ && echo "Moving files to parent directory..." \
+ && cp -r * .. 2>/dev/null || true \
+ && cp -r .* .. 2>/dev/null || true \
+ && cd .. \
+ && if [ -d "temp" ]; then \
+      echo "Removing temp directory..." \
+      && rm -rf temp; \
+    fi \
+ && echo "Setup completed successfully!"
+'@
 
         # Create Laravel project with all selected options
         Write-Host "Creating new Laravel project..." -ForegroundColor Cyan
@@ -466,23 +481,23 @@ switch ($projectType) {
         }
         
         # Update Laravel .env with values from .env.setup
-        ((Get-Content -Path .env) -replace 'APP_NAME=.*', "APP_NAME=$projectName") | Set-Content -Path .env
-        ((Get-Content -Path .env) -replace 'APP_URL=.*', "APP_URL=http://localhost:$nginxPort") | Set-Content -Path .env
+        ((Get-Content -Path .env) -replace 'APP_NAME=.*', ("APP_NAME={0}" -f $projectName)) | Set-Content -Path .env
+        ((Get-Content -Path .env) -replace 'APP_URL=.*', ("APP_URL=http://localhost:{0}" -f $nginxPort)) | Set-Content -Path .env
         ((Get-Content -Path .env) -replace 'DB_HOST=.*', 'DB_HOST=mysql') | Set-Content -Path .env
         ((Get-Content -Path .env) -replace 'DB_PORT=.*', 'DB_PORT=3306') | Set-Content -Path .env
-        ((Get-Content -Path .env) -replace 'DB_DATABASE=.*', "DB_DATABASE=${projectName}_db") | Set-Content -Path .env
-        ((Get-Content -Path .env) -replace 'DB_USERNAME=.*', "DB_USERNAME=${projectName}_user") | Set-Content -Path .env
+        ((Get-Content -Path .env) -replace 'DB_DATABASE=.*', ("DB_DATABASE={0}_db" -f $projectName)) | Set-Content -Path .env
+        ((Get-Content -Path .env) -replace 'DB_USERNAME=.*', ("DB_USERNAME={0}_user" -f $projectName)) | Set-Content -Path .env
         ((Get-Content -Path .env) -replace 'DB_PASSWORD=.*', 'DB_PASSWORD=secret') | Set-Content -Path .env
         ((Get-Content -Path .env) -replace 'REDIS_HOST=.*', 'REDIS_HOST=redis') | Set-Content -Path .env
         ((Get-Content -Path .env) -replace 'REDIS_PASSWORD=.*', 'REDIS_PASSWORD=null') | Set-Content -Path .env
-        ((Get-Content -Path .env) -replace 'REDIS_PORT=.*', "REDIS_PORT=$redisPort") | Set-Content -Path .env
+        ((Get-Content -Path .env) -replace 'REDIS_PORT=.*', ("REDIS_PORT={0}" -f $redisPort)) | Set-Content -Path .env
 
         Write-Host "`nLaravel project created successfully!"
         Write-Host "Environment configured with:"
-        Write-Host "- App URL: http://localhost:$nginxPort"
-        Write-Host "- Database: ${projectName}_db"
-        Write-Host "- DB User: ${projectName}_user"
-        Write-Host "- Redis Port: $redisPort"
+        Write-Host ("- App URL: http://localhost:{0}" -f $nginxPort)
+        Write-Host ("- Database: {0}_db" -f $projectName)
+        Write-Host ("- DB User: {0}_user" -f $projectName)
+        Write-Host ("- Redis Port: {0}" -f $redisPort)
     }
     2 {
         Write-Host "Creating new Nuxt project..."
