@@ -404,7 +404,7 @@ switch ($projectType) {
             $testChoice = $testChoice -as [int]
         } while (-not $testChoice -or $testChoice -lt 1 -or $testChoice -gt 2)
 
-        # Build Laravel installation command
+        # Add cleanup and file movement as separate steps
         $laravelCmd = "composer create-project laravel/laravel temp"
 
         # Add authentication options
@@ -434,7 +434,7 @@ switch ($projectType) {
                 }
             }
             3 {  # Jetstream
-                $laravelCmd += " && composer require laravel/jetstream"
+                $laravelCmd += " && cd temp && composer require laravel/jetstream"
                 
                 if ($jetstreamStackChoice -eq 1) {
                     $laravelCmd += " && php artisan jetstream:install livewire --teams"
@@ -448,49 +448,63 @@ switch ($projectType) {
 
         # Add Pest if selected
         if ($testChoice -eq 2) {
-            $laravelCmd += " && composer require pestphp/pest --dev --with-all-dependencies && php artisan pest:install"
+            $laravelCmd += " && cd temp && composer require pestphp/pest --dev --with-all-dependencies && php artisan pest:install"
         }
-
-        # Add final move commands with error checking
-        $laravelCmd += @'
- && echo "Moving files to parent directory..." \
- && cp -r * .. 2>/dev/null || true \
- && cp -r .* .. 2>/dev/null || true \
- && cd .. \
- && if [ -d "temp" ]; then \
-      echo "Removing temp directory..." \
-      && rm -rf temp; \
-    fi \
- && echo "Setup completed successfully!"
-'@
 
         # Create Laravel project with all selected options
         Write-Host "Creating new Laravel project..." -ForegroundColor Cyan
         docker compose exec app bash -c $laravelCmd
-
+        
+        # Move files from temp directory to root
+        Write-Host "Moving Laravel files from temp directory to root..." -ForegroundColor Cyan
+        $moveCmd = @"
+cd /var/www/html && 
+echo 'Moving Laravel files to project root...' &&
+find temp -mindepth 1 -maxdepth 1 -not -path '*/\.*' -exec mv -f {} . \; &&
+find temp -mindepth 1 -maxdepth 1 -path '*/\.*' -exec mv -f {} . \; &&
+rm -rf temp &&
+echo 'Files moved successfully!'
+"@
+        docker compose exec app bash -c $moveCmd
+        
         # Add custom entries to .gitignore
         "`n# Custom entries`ndocker/`n.env.setup" | Add-Content -Path .gitignore
         Write-Host "Added custom entries to .gitignore" -ForegroundColor Green
-
-
-        # Install Pest if selected
-        if ($testChoice -eq 2) {
+        
+        # Update .env file from the container
+        Write-Host "Updating environment configuration..." -ForegroundColor Cyan
+        
+        # Create .env file backup if it exists
+        if (Test-Path -Path .env) {
+            Copy-Item -Path .env -Destination .env.backup -Force
+        }
+        
+        # Run .env update command
+        $envUpdateCmd = @"
+cd /var/www/html &&
+sed -i 's/APP_NAME=.*/APP_NAME=$projectName/g' .env &&
+sed -i 's#APP_URL=.*#APP_URL=http://localhost:$nginxPort#g' .env &&
+sed -i 's/DB_HOST=.*/DB_HOST=mysql/g' .env &&
+sed -i 's/DB_PORT=.*/DB_PORT=3306/g' .env &&
+sed -i 's/DB_DATABASE=.*/DB_DATABASE=${projectName}_db/g' .env &&
+sed -i 's/DB_USERNAME=.*/DB_USERNAME=${projectName}_user/g' .env &&
+sed -i 's/DB_PASSWORD=.*/DB_PASSWORD=secret/g' .env &&
+sed -i 's/REDIS_HOST=.*/REDIS_HOST=redis/g' .env &&
+sed -i 's/REDIS_PASSWORD=.*/REDIS_PASSWORD=null/g' .env &&
+sed -i 's/REDIS_PORT=.*/REDIS_PORT=$redisPort/g' .env &&
+cat .env > .env.example
+"@
+        docker compose exec app bash -c $envUpdateCmd
+        
+        # Copy the updated .env from the container to the host
+        docker compose exec app cat /var/www/html/.env | Out-File -FilePath .env -Encoding utf8
+        
+        # Install Pest if selected and wasn't done in Laravel setup
+        if ($testChoice -eq 2 -and -not (Test-Path -Path "vendor/pestphp")) {
             Write-Host "Installing Pest testing framework..." -ForegroundColor Cyan
             docker compose exec app composer require pestphp/pest --dev --with-all-dependencies
             docker compose exec app php artisan pest:install
         }
-        
-        # Update Laravel .env with values from .env.setup
-        ((Get-Content -Path .env) -replace 'APP_NAME=.*', ("APP_NAME={0}" -f $projectName)) | Set-Content -Path .env
-        ((Get-Content -Path .env) -replace 'APP_URL=.*', ("APP_URL=http://localhost:{0}" -f $nginxPort)) | Set-Content -Path .env
-        ((Get-Content -Path .env) -replace 'DB_HOST=.*', 'DB_HOST=mysql') | Set-Content -Path .env
-        ((Get-Content -Path .env) -replace 'DB_PORT=.*', 'DB_PORT=3306') | Set-Content -Path .env
-        ((Get-Content -Path .env) -replace 'DB_DATABASE=.*', ("DB_DATABASE={0}_db" -f $projectName)) | Set-Content -Path .env
-        ((Get-Content -Path .env) -replace 'DB_USERNAME=.*', ("DB_USERNAME={0}_user" -f $projectName)) | Set-Content -Path .env
-        ((Get-Content -Path .env) -replace 'DB_PASSWORD=.*', 'DB_PASSWORD=secret') | Set-Content -Path .env
-        ((Get-Content -Path .env) -replace 'REDIS_HOST=.*', 'REDIS_HOST=redis') | Set-Content -Path .env
-        ((Get-Content -Path .env) -replace 'REDIS_PASSWORD=.*', 'REDIS_PASSWORD=null') | Set-Content -Path .env
-        ((Get-Content -Path .env) -replace 'REDIS_PORT=.*', ("REDIS_PORT={0}" -f $redisPort)) | Set-Content -Path .env
 
         Write-Host "`nLaravel project created successfully!"
         Write-Host "Environment configured with:"

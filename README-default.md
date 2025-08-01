@@ -9,6 +9,8 @@ This repository contains a Docker setup for Laravel development with configurabl
 **On Windows (PowerShell):**
 ```powershell
 .\setup.ps1
+
+powershell -ExecutionPolicy Bypass -File setup.ps1
 ```
 
 **On macOS/Linux:**
